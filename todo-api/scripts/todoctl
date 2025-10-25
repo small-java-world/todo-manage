@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/api.sh"
+
+usage(){ cat <<USAGE
+Usage: $0 <command> [options]
+  health                               GET /
+  list [--status s] [--n N]            GET /tasks minimal fields
+  get ID                                GET /tasks/{id}
+  update ID key=val [key=val ...]       PUT /tasks/{id}
+  delete ID                             DELETE /tasks/{id}
+  tree                                  GET /tasks/tree/
+  req-create --title T [--desc D]
+  task-create --title T --parent ID [--type task|subtask] [--desc D]
+  reviews-list                          GET /reviews/
+  review-create --hid HID --comment C [--verdict v]
+  artifacts-list                        GET /artifacts/
+  artifact-create --hid HID --uri U [--type link]
+  backup-list                           GET /backup/
+  backup-create                         POST /backup/
+  git-config                           GET /storage/git/config
+  git-resolve --uri git://...          POST /storage/git/resolve-uri
+  git-abs2uri --abs /abs/path          POST /storage/git/from-abs
+  fs-config                            GET /storage/fs/config
+  fs-resolve --uri fs://...            POST /storage/fs/resolve-uri
+  fs-abs2uri --abs /abs/path           POST /storage/fs/from-abs
+USAGE
+}
+
+cmd="${1:-}" || true; shift || true
+case "$cmd" in
+  health)
+    api::health | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  list)
+    status="in_progress"; n=5
+    while [ $# -gt 0 ]; do case "$1" in --status) status="$2"; shift 2;; --n|--limit) n="$2"; shift 2;; *) echo "Unknown: $1" >&2; exit 2;; esac; done
+    api::tasks_list task "$status" "$n" | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  get)
+    [ $# -ge 1 ] || { echo "ID required" >&2; exit 2; }
+    api::task_get "$1" | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  update)
+    [ $# -ge 2 ] || { echo "Usage: update ID key=val ..." >&2; exit 2; }
+    id="$1"; shift
+    api::task_update "$id" "$@" | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  delete)
+    [ $# -ge 1 ] || { echo "ID required" >&2; exit 2; }
+    api::task_delete "$1"
+    ;;
+  tree)
+    api::tree | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  req-create)
+    title=""; desc=""
+    while [ $# -gt 0 ]; do case "$1" in --title) title="$2"; shift 2;; --desc) desc="$2"; shift 2;; *) echo "Unknown: $1" >&2; exit 2;; esac; done
+    [ -z "$title" ] && echo "--title required" >&2 && exit 2
+    api::requirement_create "$title" "$desc" | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  task-create)
+    title=""; parent=""; type="task"; desc=""
+    while [ $# -gt 0 ]; do case "$1" in --title) title="$2"; shift 2;; --parent) parent="$2"; shift 2;; --type) type="$2"; shift 2;; --desc) desc="$2"; shift 2;; *) echo "Unknown: $1" >&2; exit 2;; esac; done
+    [ -z "$title" ] && echo "--title required" >&2 && exit 2
+    [ -z "$parent" ] && echo "--parent required" >&2 && exit 2
+    api::task_create "$title" "$parent" "$type" "$desc" | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  reviews-list)
+    api::reviews_list | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  review-create)
+    hid=""; comment=""; verdict="pending"
+    while [ $# -gt 0 ]; do case "$1" in --hid) hid="$2"; shift 2;; --comment) comment="$2"; shift 2;; --verdict) verdict="$2"; shift 2;; *) echo "Unknown: $1" >&2; exit 2;; esac; done
+    [ -z "$hid" ] && echo "--hid required" >&2 && exit 2
+    [ -z "$comment" ] && echo "--comment required" >&2 && exit 2
+    api::review_create "$hid" "$comment" "$verdict" | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  artifacts-list)
+    api::artifacts_list | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  artifact-create)
+    ahid=""; uri=""; atype="link"
+    while [ $# -gt 0 ]; do case "$1" in --hid) ahid="$2"; shift 2;; --uri) uri="$2"; shift 2;; --type) atype="$2"; shift 2;; *) echo "Unknown: $1" >&2; exit 2;; esac; done
+    [ -z "$ahid" ] && echo "--hid required" >&2 && exit 2
+    [ -z "$uri" ] && echo "--uri required" >&2 && exit 2
+    api::artifact_create "$ahid" "$uri" "$atype" | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  backup-list)
+    api::backup_list | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  backup-create)
+    api::backup_create | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  git-config)
+    api::storage_git_config | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  git-resolve)
+    uri=""
+    while [ $# -gt 0 ]; do case "$1" in --uri) uri="$2"; shift 2;; *) echo "Unknown: $1" >&2; exit 2;; esac; done
+    [ -z "$uri" ] && echo "--uri required" >&2 && exit 2
+    api::storage_git_resolve_uri "$uri" | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  git-abs2uri)
+    abs=""
+    while [ $# -gt 0 ]; do case "$1" in --abs) abs="$2"; shift 2;; *) echo "Unknown: $1" >&2; exit 2;; esac; done
+    [ -z "$abs" ] && echo "--abs required" >&2 && exit 2
+    api::storage_git_from_abs "$abs" | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  fs-config)
+    api::storage_fs_config | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  fs-resolve)
+    uri=""
+    while [ $# -gt 0 ]; do case "$1" in --uri) uri="$2"; shift 2;; *) echo "Unknown: $1" >&2; exit 2;; esac; done
+    [ -z "$uri" ] && echo "--uri required" >&2 && exit 2
+    api::storage_fs_resolve_uri "$uri" | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  fs-abs2uri)
+    abs=""
+    while [ $# -gt 0 ]; do case "$1" in --abs) abs="$2"; shift 2;; *) echo "Unknown: $1" >&2; exit 2;; esac; done
+    [ -z "$abs" ] && echo "--abs required" >&2 && exit 2
+    api::storage_fs_from_abs "$abs" | (command -v jq >/dev/null && jq . || cat)
+    ;;
+  *) usage; exit 2;;
+esac

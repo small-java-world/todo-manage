@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(dir /b)",
+      "Read(//d/todo_api_fastapi/**)",
+      "Read(//d/**)",
+      "Bash(test -d \"D:/todo_api_fastapi/.claude\")",
+      "WebFetch(domain:github.com)",
+      "Bash(find \"D:/todo_api_fastapi/.claude\" -type f -exec ls -lh {} ;)",
+      "Bash(chmod +x \"D:/todo_api_fastapi/.claude/skills/todo-api-knowledge/scripts/smoke_test.py\" \"D:/todo_api_fastapi/.claude/skills/todo-api-knowledge/scripts/quick_test.sh\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

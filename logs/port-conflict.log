@@ -1,0 +1,6 @@
+﻿todo-api-1  | INFO:     Will watch for changes in these directories: ['/app']
+todo-api-1  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+todo-api-1  | INFO:     Started reloader process [1] using WatchFiles
+todo-api-1  | INFO:     Started server process [8]
+todo-api-1  | INFO:     Waiting for application startup.
+todo-api-1  | INFO:     Application startup complete.

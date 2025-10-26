@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 # from app.services.task_service import TaskService  # 循環インポートを回避
 from app.models.task import Task, TaskType
 from app.services.cas_service import CASService
+from app.services.git_service import GitService
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ class TDDHookService:
     def __init__(self, db: Session):
         self.db = db
         self.cas_service = CASService(db)
+        self.git_service = GitService()
         # self.task_service = TaskService(db)  # 循環インポートを回避
 
     def handle_status_transition(
@@ -40,8 +42,18 @@ class TDDHookService:
         """開発開始時の処理"""
         logger.info(f"Starting development for task {task.hierarchical_id}")
 
-        # Redテストの雛形を生成
-        red_test_content = self._generate_red_test_template(task)
+        # OpenSpec を読み取り、存在すればそれに基づく Red テスト雛形を生成
+        red_test_content = None
+        try:
+            openspec_text = self.git_service.get_openspec_file(task.hierarchical_id)
+            if openspec_text:
+                red_test_content = self._generate_red_test_from_openspec(task, openspec_text)
+        except Exception as e:
+            logger.warning(f"OpenSpec read error for {task.hierarchical_id}: {str(e)}")
+
+        # フォールバック: OpenSpec が無い場合は汎用の雛形
+        if not red_test_content:
+            red_test_content = self._generate_red_test_template(task)
         if red_test_content:
             # CASに格納
             sha256_hash = self.cas_service.store_artifact(
@@ -57,6 +69,72 @@ class TDDHookService:
             )
 
             logger.info(f"Generated red test template for task {task.hierarchical_id}")
+
+    def _generate_red_test_from_openspec(self, task: Task, openspec_text: str) -> Optional[str]:
+        """OpenSpec から Red テストの雛形を生成（PoC: 最小構文の抽出）。"""
+        try:
+            import yaml  # type: ignore
+
+            data = yaml.safe_load(openspec_text) or {}
+            ac_list = data.get("acceptance_criteria") or []
+            scenarios = data.get("scenarios") or []
+
+            # 1件だけ拾って雛形に落とす（PoC）
+            ac_id = None
+            ac_text = None
+            if isinstance(ac_list, list) and ac_list:
+                first = ac_list[0]
+                ac_id = first.get("id") if isinstance(first, dict) else None
+                ac_text = first.get("text") if isinstance(first, dict) else None
+
+            scenario_name = None
+            step = None
+            if isinstance(scenarios, list) and scenarios:
+                s0 = scenarios[0]
+                scenario_name = s0.get("name") if isinstance(s0, dict) else None
+                steps = s0.get("steps") if isinstance(s0, dict) else None
+                if isinstance(steps, list) and steps:
+                    step = steps[0]
+
+            test_name = task.hierarchical_id.replace(".", "_").replace("-", "_").lower()
+            doc_lines = []
+            if ac_id or ac_text:
+                doc_lines.append(f"AC {ac_id or ''}: {ac_text or ''}")
+            if scenario_name:
+                doc_lines.append(f"Scenario: {scenario_name}")
+
+            # 可能ならHTTPの雛形
+            http_lines = []
+            if isinstance(step, dict) and "request" in step and "expect" in step:
+                req = step.get("request") or {}
+                exp = step.get("expect") or {}
+                method = (req.get("method") or "GET").upper()
+                path = req.get("path") or "/"
+                status = exp.get("status") or 200
+                http_lines.append(f"response = client.{method.lower()}(\"{path}\")")
+                http_lines.append("assert response.status_code == " + str(status))
+
+            doc = "\n".join(doc_lines) if doc_lines else "Red test generated from OpenSpec"
+
+            content = f'''import pytest
+from fastapi.testclient import TestClient
+from app.main import app
+
+client = TestClient(app)
+
+
+@pytest.mark.openspec
+def test_{test_name}_red_from_openspec():
+    """{doc}
+    This test should fail initially (Red phase of TDD).
+    """
+    # TODO: Flesh out based on full OpenSpec
+    {"\n    ".join(http_lines) if http_lines else "assert False, 'Fill in steps from OpenSpec'"}
+'''
+            return content
+        except Exception as e:
+            logger.warning(f"OpenSpec parse error for {task.hierarchical_id}: {str(e)}")
+            return None
 
     def _handle_review_request(self, task: Task):
         """レビュー依頼時の処理"""

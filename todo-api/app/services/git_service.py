@@ -62,6 +62,11 @@ class GitService:
                 f"Tests path only available for tasks, not: {hierarchical_id}"
             )
 
+    def get_openspec_path(self, hierarchical_id: str) -> Path:
+        """OpenSpecファイルのパスを取得"""
+        task_path = self.get_task_path(hierarchical_id)
+        return task_path / "OpenSpec.yaml"
+
     def create_outline_file(
         self, hierarchical_id: str, outline_data: Dict[str, Any]
     ) -> bool:
@@ -126,6 +131,38 @@ class GitService:
             logger.error(f"Failed to read spec file for {hierarchical_id}: {str(e)}")
             return None
 
+    def create_openspec_file(self, hierarchical_id: str, content: str) -> bool:
+        """OpenSpecファイルを作成"""
+        try:
+            spec_path = self.get_openspec_path(hierarchical_id)
+            spec_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(spec_path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+            logger.info(f"Created OpenSpec file: {spec_path}")
+            return True
+        except Exception as e:
+            logger.error(
+                f"Failed to create OpenSpec file for {hierarchical_id}: {str(e)}"
+            )
+            return False
+
+    def get_openspec_file(self, hierarchical_id: str) -> Optional[str]:
+        """OpenSpecファイルを取得"""
+        try:
+            spec_path = self.get_openspec_path(hierarchical_id)
+            if not spec_path.exists():
+                return None
+
+            with open(spec_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            logger.error(
+                f"Failed to read OpenSpec file for {hierarchical_id}: {str(e)}"
+            )
+            return None
+
     def get_git_uri(self, hierarchical_id: str, file_type: str = "outline") -> str:
         """Git URIを生成"""
         if file_type == "outline":
@@ -134,6 +171,8 @@ class GitService:
             file_path = self.get_spec_path(hierarchical_id)
         elif file_type == "tests":
             file_path = self.get_tests_path(hierarchical_id)
+        elif file_type == "openspec":
+            file_path = self.get_openspec_path(hierarchical_id)
         else:
             raise ValueError(f"Invalid file type: {file_type}")
 

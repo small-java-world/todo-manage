@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.services.cas_service import CASService
 from app.services.git_service import GitService
+from app.core.database import get_db
 
 router = APIRouter(prefix="/storage", tags=["storage"])
 
@@ -324,3 +325,97 @@ def fs_uri_from_abs(req: FromAbsRequest):
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Path outside fs root')
     return {"abs_path": str(abs_path), "uri": f"fs://{rel.as_posix()}", "fs_root": str(fs_root)}
+
+
+# BEGIN OpenSpec endpoints
+class OpenSpecValidateResponse(BaseModel):
+    valid: bool
+    message: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+
+
+@router.get("/openspec/{hierarchical_id}")
+def get_openspec(hierarchical_id: str):
+    """OpenSpecファイルを取得"""
+    git_service = GitService()
+    content = git_service.get_openspec_file(hierarchical_id)
+    if content is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OpenSpec not found")
+    return {
+        "hierarchical_id": hierarchical_id,
+        "openspec_uri": git_service.get_git_uri(hierarchical_id, "openspec"),
+        "content": content,
+    }
+
+
+@router.post("/openspec/{hierarchical_id}")
+def put_openspec(hierarchical_id: str, content: str, db: Session = Depends(get_db)):
+    """OpenSpecファイルを保存（新規/上書き）"""
+    git_service = GitService()
+    ok = git_service.create_openspec_file(hierarchical_id, content)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to write OpenSpec")
+    # CASへスナップショット（仕様の追跡用）
+    cas_service = CASService(db)
+    sha256_hash = cas_service.store_artifact(
+        content=content.encode("utf-8"),
+        media_type="text/yaml",
+        source_task_hid=hierarchical_id,
+        purpose="spec",
+    )
+    try:
+        cas_service.link_artifact_to_task(task_hid=hierarchical_id, sha256_hash=sha256_hash, role="spec")
+    except Exception:
+        # 失敗しても保存自体は成功扱い（冪等性のため）
+        pass
+    return {
+        "hierarchical_id": hierarchical_id,
+        "openspec_uri": git_service.get_git_uri(hierarchical_id, "openspec"),
+        "message": "OpenSpec saved",
+        "cas_sha256": sha256_hash,
+    }
+
+
+@router.post("/openspec/{hierarchical_id}/validate", response_model=OpenSpecValidateResponse)
+def validate_openspec(hierarchical_id: str):
+    """OpenSpecのYAML妥当性（最小）を検証。PoCでは構文のみ。"""
+    git_service = GitService()
+    content = git_service.get_openspec_file(hierarchical_id)
+    if content is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="OpenSpec not found")
+    try:
+        import yaml  # type: ignore
+
+        parsed = yaml.safe_load(content)
+        # 最小スキーマチェック（PoC）
+        missing = []
+        if not isinstance(parsed, dict):
+            return OpenSpecValidateResponse(valid=False, message="Root must be a mapping")
+        for key in ["id", "title", "acceptance_criteria"]:
+            if key not in parsed:
+                missing.append(key)
+        if missing:
+            return OpenSpecValidateResponse(valid=False, message="Missing keys", details={"missing": missing})
+        return OpenSpecValidateResponse(valid=True, message="YAML is valid", details={"keys": list(parsed.keys())})
+    except Exception as e:
+        return OpenSpecValidateResponse(valid=False, message=str(e))
+
+
+@router.post("/openspec/{hierarchical_id}/generate-tests")
+def generate_tests_from_openspec(hierarchical_id: str, db: Session = Depends(get_db)):
+    """OpenSpecからRedテスト雛形を生成（同期）。PoCとして最初のAC/Scenarioのみ。"""
+    from app.models.task import Task as TaskModel
+    task = db.query(TaskModel).filter(TaskModel.hierarchical_id == hierarchical_id).first()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    # TDDHookServiceの内部ロジックを利用
+    try:
+        from app.services.tdd_hook_service import TDDHookService
+
+        hook = TDDHookService(db)
+        # 開発開始相当の生成を強制実行
+        hook._handle_start_development(task)  # type: ignore
+        return {"hierarchical_id": hierarchical_id, "message": "Generated red test from OpenSpec (if present)"}
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
